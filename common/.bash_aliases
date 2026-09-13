@@ -180,7 +180,7 @@ function genssh() {
     local name="$1"
     shift
     local comment="${*:-$USER@$(hostname)}"
-    local keyfile="$HOME/.ssh/id_ed25519-$name"
+    local keyfile="$HOME/.ssh/$name-ed25519"
     if [ -e "$keyfile" ] || [ -e "$keyfile.pub" ]; then
         echo "Error: $keyfile (or .pub) already exists" >&2
         return 2
