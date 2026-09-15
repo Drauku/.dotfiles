@@ -272,14 +272,6 @@ replay_selections() {
     selected_pkgs=("${saved_pkgs[@]}")
     run_zsh_install="$saved_zsh_install"
 
-    # CSM supersedes the docker package, matching the interactive path.
-    if pkg_selected "docker" && [ -e "/usr/local/bin/csm" ]; then
-        local kept=() p
-        for p in "${selected_pkgs[@]}"; do [ "$p" != "docker" ] && kept+=("$p"); done
-        selected_pkgs=("${kept[@]}")
-        echo -e "${ylw}>> CSM detected. Skipping legacy docker stow.${rst}"
-    fi
-
     echo -e "${blu}Replaying saved selection: ${grn}$(IFS=', '; echo "${selected_pkgs[*]}")${rst}"
     for pkg in "${optional_pkgs[@]}"; do
         pkg_selected "$pkg" || queue_unstow "$pkg"
@@ -306,18 +298,13 @@ select_packages() {
 
         case "$REPLY" in
             [Yy]*)
-                if [[ "$pkg" == "docker" && -e "/usr/local/bin/csm" ]]; then
-                    echo -e "${ylw}>> CSM detected. Skipping legacy docker stow.${rst}"
-                    queue_unstow "$pkg"
-                else
-                    selected_pkgs+=("$pkg")
-                    # Follow-up: offer to provision the full zsh environment.
-                    # Stowing alone only links ~/.p10k.zsh; this installs the
-                    # packages/fonts/plugins and wires ~/.zshrc to source it.
-                    if [[ "$pkg" == "zsh" ]]; then
-                        ask "  ${ylw}└─ Also install the zsh environment (oh-my-zsh, powerlevel10k, fonts, plugins, .zshrc)?${rst} (y/N): " "n"
-                        [[ "$REPLY" =~ ^[Yy]$ ]] && run_zsh_install=1
-                    fi
+                selected_pkgs+=("$pkg")
+                # Follow-up: offer to provision the full zsh environment.
+                # Stowing alone only links ~/.p10k.zsh; this installs the
+                # packages/fonts/plugins and wires ~/.zshrc to source it.
+                if [[ "$pkg" == "zsh" ]]; then
+                    ask "  ${ylw}└─ Also install the zsh environment (oh-my-zsh, powerlevel10k, fonts, plugins, .zshrc)?${rst} (y/N): " "n"
+                    [[ "$REPLY" =~ ^[Yy]$ ]] && run_zsh_install=1
                 fi
                 ;;
             *) queue_unstow "$pkg" ;;
@@ -361,11 +348,12 @@ unstow_package() {
 }
 
 # --- 7. Shell alias wiring ---
-# bash and zsh are POSIX-compatible and share ~/.bash_aliases; fish is not, so
-# it gets its own native ~/.config/fish/aliases.fish. Each shell's rc only needs
-# a one-line `source` hook. These hooks must run AFTER any distro config (e.g.
-# CachyOS defines its own `ls`), so we append at EOF. Idempotent: a matching
-# non-comment line already present is left untouched.
+# bash and zsh are POSIX-compatible and share ~/.bash_init, which loads every
+# ~/.bash_<name> config; fish is not, so it gets its own native
+# ~/.config/fish/aliases.fish. Each shell's rc only needs a one-line `source`
+# hook. These hooks must run AFTER any distro config (e.g. CachyOS defines its
+# own `ls`), so we append at EOF. Idempotent: a matching non-comment line
+# already present is left untouched.
 _ensure_line() {
     local file=$1 line=$2
     [ -f "$file" ] || return 0
@@ -378,13 +366,25 @@ _ensure_line() {
     echo -e "  ${grn}Wired${rst} ${cyn}$file${rst}"
 }
 
-# zsh reuses the shared POSIX aliases from the always-stowed common package.
-# The rc file is created if absent so the hook lands even on a fresh HOME.
+# Drop an exact whole line from a file, if present.
+_remove_line() {
+    local file=$1 line=$2
+    [ -f "$file" ] || return 0
+    grep -qxF -- "$line" "$file" || return 0
+    grep -vxF -- "$line" "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    echo -e "  ${ylw}Unwired${rst} ${cyn}$file${rst}: $line"
+}
+
+# zsh runs the same ~/.bash_init loader as bash, from the always-stowed common
+# package. A direct .bash_aliases hook would source that file twice, so it is
+# removed. The rc file is created if absent so the hook lands on a fresh HOME.
 configure_zsh_aliases() {
     pkg_selected zsh || return 0
     [ -f "$HOME/.zshrc" ] || touch "$HOME/.zshrc"
-    _ensure_line "$HOME/.zshrc" \
+    _remove_line "$HOME/.zshrc" \
         '[ -f "$HOME/.bash_aliases" ] && source "$HOME/.bash_aliases"'
+    _ensure_line "$HOME/.zshrc" \
+        '[ -f "$HOME/.bash_init" ] && source "$HOME/.bash_init"'
 }
 
 # fish sources its own native aliases file (symlinked by the fish package).

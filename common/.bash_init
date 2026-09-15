@@ -1,0 +1,29 @@
+#!/bin/bash
+# --- common/.bash_init ---
+# Shared interactive-shell setup for bash and zsh: PATH, then every
+# ~/.bash_<name> file (common ones first, then one per stowed package).
+
+configs=("aliases" "colors" "secrets" "vars")
+if [ -d "$HOME/.dotfiles" ]; then
+    for dir in "$HOME/.dotfiles"/*/; do
+        [ -d "$dir" ] || continue
+        dirname=$(basename "$dir")
+        [ "$dirname" = "common" ] && continue
+        configs+=("$dirname")
+    done
+fi
+
+# PATH is set before the configs run their `command -v` checks, since eza,
+# csm and cargo tools live under ~/.local/bin or ~/.cargo/bin.
+export PATH="$PATH:$HOME/.lmstudio/bin"
+export PATH="$HOME/.local/bin:$PATH"
+[ -r "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+if [ -n "$PATH" ]; then
+    export PATH=$(echo -n "$PATH" | awk -v RS=: -v ORS=: '!x[$0]++' | sed 's/:$//')
+fi
+
+for conf in "${configs[@]}"; do
+    src="$HOME/.bash_$conf"; [ -f "$src" ] && . "$src"
+done
+
+unset configs conf dir dirname src

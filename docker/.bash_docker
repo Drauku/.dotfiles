@@ -1,15 +1,8 @@
 #!/bin/bash
-# --- containers/.bash_ct_cmd ---
+# --- docker/.bash_docker ---
+# Container-specific aliases and helpers. Generic helpers live in .bash_aliases.
 
-# Container stacks/projects directory
-stacks_dir="$HOME/stacks"
-backup_dir="$stacks_dir/.backup"
-common_dir="$stacks_dir/.common"
-
-# Check if Container Stack Manager (CSM) is already handled
-csm_script="$HOME/stacks/.common/csm.sh"
-
-# Detect if we should use Podman (common on Fedora/CoreOS)
+# Prefer podman where installed (Fedora/CoreOS), otherwise docker.
 if command -v podman >/dev/null 2>&1; then
     alias docker='podman'
     export ct_engine='podman'
@@ -20,44 +13,38 @@ else
     return 1
 fi
 
-# Safely run container commands with or without sudo
-if id -Gn | grep -qw $ct_engine; then
+# --- Container Stack Manager (csm) ---
+# csm provides the stack helpers (cds, iplan, ipvpn, wtup) where installed.
+# Its output also emits genkey and iphost, which .bash_aliases owns, so those
+# two lines are dropped before eval.
+if command -v csm >/dev/null 2>&1; then
+    # Aliases outrank functions in zsh, so drop any same-named alias first.
+    if alias cds >/dev/null 2>&1; then unalias cds; fi
+    eval "$(csm --aliases | sed -E '/^(genkey|iphost)\(\)/d')"
+    # Short form; an sm symlink in PATH takes precedence over the function.
+    if ! command -v sm >/dev/null 2>&1; then
+        sm(){ csm "$@"; }
+    fi
+    return 0
+fi
+
+# --- Legacy stack helpers (hosts without csm) ---
+stacks_dir="$HOME/stacks"
+backup_dir="$stacks_dir/.backup"
+common_dir="$stacks_dir/.common"
+
+# Safely run commands as root or non-root user
+if command -v sudo >/dev/null 2>&1 && [[ $EUID -ne 0 ]]; then
+    run_cmd(){ sudo "$@" || echo "${red}Error: Command failed with sudo.${rst}"; }
+else
+    run_cmd(){ "$@" || echo "${red}Error: Command failed.${rst}"; }
+fi
+
+# Run container commands with or without sudo, depending on group membership
+if id -Gn | grep -qw "$ct_engine"; then
     ct_cmd(){ $ct_engine "$@" || echo "${red}Error: Command '$ct_engine ${*}' failed.${rst}"; }
 else
     ct_cmd(){ run_cmd $ct_engine "$@" || echo "${red}Error: Command 'sudo $ct_engine ${*}' failed.${rst}"; }
-fi
-
-# Set the user and group for stacks
-ct_usr="$USER"
-ct_grp="docker"
-
-# Get UID and GID for the stacks user, with a default of 2000
-if id -u "$ct_usr" >/dev/null 2>&1; then
-    export ct_uid="$(id -u "$ct_usr")"
-else
-    export ct_uid="2000"
-fi
-
-if id -g "$ct_grp" >/dev/null 2>&1; then
-    export ct_gid="$(id -g "$ct_grp")"
-else
-    export ct_gid="2000"
-fi
-
-# Check if container user and group exists before exporting
-if ! getent passwd "$ct_usr" >/dev/null 2>&1 || ! getent group "$ct_grp" >/dev/null 2>&1; then
-    echo "${ylw}Warning${rst}: user '$ct_usr' or group '$ct_grp' not registered in NSS; using UID:GID ${ct_uid}:${ct_gid}."
-fi
-
-# Safely run commands as root or non-root user
-if command -v sudo >/dev/null 2>&1; then
-    if [[ $EUID -ne 0 ]]; then
-        run_cmd(){ sudo "$@" || echo "${red}Error: Command failed with sudo.${rst}"; }
-    else
-        run_cmd(){ "$@" || echo "${red}Error: Command failed.${rst}"; }
-    fi
-else
-    run_cmd(){ "$@" || echo "${red}Error: Command failed.${rst}"; }
 fi
 
 # Filesystem commands: elevate only when stacks_dir is outside user-writable paths
@@ -65,6 +52,23 @@ if [ -w "$stacks_dir" ] || [ -w "$(dirname "$stacks_dir")" ]; then
     _fs_cmd() { "$@"; }
 else
     _fs_cmd() { run_cmd "$@"; }
+fi
+
+# Owner user and group for stack files; UID/GID default to 2000 when unknown
+ct_usr="$USER"
+ct_grp="docker"
+if id -u "$ct_usr" >/dev/null 2>&1; then
+    export ct_uid="$(id -u "$ct_usr")"
+else
+    export ct_uid="2000"
+fi
+if id -g "$ct_grp" >/dev/null 2>&1; then
+    export ct_gid="$(id -g "$ct_grp")"
+else
+    export ct_gid="2000"
+fi
+if ! getent passwd "$ct_usr" >/dev/null 2>&1 || ! getent group "$ct_grp" >/dev/null 2>&1; then
+    echo "${ylw}Warning${rst}: user '$ct_usr' or group '$ct_grp' not registered in NSS; using UID:GID ${ct_uid}:${ct_gid}."
 fi
 
 # Validate stacks_dir exists, prompt to create if not
@@ -80,135 +84,110 @@ if [ ! -d "$stacks_dir" ]; then
     fi
 fi
 
-# Create ~/stacks symlink if it doesn't already exist
-if [ ! -e "$HOME/stacks" ]; then
-    ln -s "$stacks_dir" "$HOME/stacks"
-fi
-
-# Check host and container IPs
-iphost(){ echo "Host IP: $(wget -qO- https://ifconfig.me/ip)"; }; alias myip="hostip"
+# Container IP checks
 iplan() { echo "Container IP: $(ct_cmd container exec -it "${*}" wget -qO- https://ipinfo.io)"; }
 ipvpn() { echo "Container IP: $(ct_cmd container exec -it "${*}" wget -qO- https://ipinfo.io/ip)" && \
           echo "     Host IP: $(wget -qO- https://ifconfig.me)"; }
+
+# One-shot watchtower update of a single container
 wtup() {
-    [[ -z \$1 ]] || echo "Usage: ctupdate <container-name>"; return 0
-    $csm_cmd run --rm --name "\$1-update" -v /var/run/$csm_cmd.sock:/var/run/$csm_cmd.sock ghcr.io/nicholas-fedor/watchtower --run-once "\$1";
+    [ -n "$1" ] || { echo "Usage: wtup <container-name>"; return 1; }
+    ct_cmd run --rm --name "$1-update" -v "/var/run/$ct_engine.sock:/var/run/$ct_engine.sock" \
+        ghcr.io/nicholas-fedor/watchtower --run-once "$1"
 }
 
-# Load CSM or legacy aliases
-if command -v csm >/dev/null 2>&1; then
-    # cd into stacks directory or a specific stack
-    if alias cds >/dev/null 2>&1; then unalias cds; fi
-    # (( $+aliases[cds] )) && unalias cds # zfs compatible only
-    eval "$(csm --aliases)"
-    # Short form; every managed item is a compose stack. An sm symlink in
-    # PATH takes precedence, since a function would shadow it.
-    if ! command -v sm >/dev/null 2>&1; then
-        sm(){ csm "$@"; }
+ct_start(){ ct_cmd compose -f "$stacks_dir/${1}/compose.yml" up -d --remove-orphans || echo "${red}Error: Failed to start stack '${1}'.${rst}"; }
+ctu(){ ct_start "$@"; }
+
+ct_stop() { ct_cmd compose -f "$stacks_dir/${1}/compose.yml" down || echo "${red}Error: Failed to stop stack '${1}'.${rst}"; }
+ctd(){ ct_stop "$@"; }
+
+ct_bounce(){ ct_stop "$1" && ct_start "$1" || echo "${red}Error: Failed to bounce stack '$1'.${rst}"; }
+ctb(){ ct_bounce "$@"; }
+
+ct_logs(){ ct_cmd compose -f "$stacks_dir/${1}/compose.yml" logs -f --tail=50 || echo "${red}Error: Failed to get logs for stack '${1}'.${rst}"; }
+ctg(){ ct_logs "$@"; }
+
+ct_stack_backup() {
+    local stack_name="${1:-}"
+    [[ -z "$stack_name" ]] && { echo "${red}Error:${ylw} Stack name required.${rst}"; return 1; }
+    [[ ! -d "$stacks_dir/$stack_name" ]] && { echo "${red}Error:${ylw} Stack '$stack_name' does not exist.${rst}"; return 1; }
+
+    local ts target_backup_dir backup_file
+    ts="$(date +%Y%m%d_%H%M%S)"
+    target_backup_dir="${backup_dir}/${stack_name}"
+    backup_file="${target_backup_dir}/${stack_name}_${ts}.tar.gz"
+
+    _fs_cmd mkdir -p "$target_backup_dir"
+    echo "Creating backup: $backup_file"
+    _fs_cmd tar -czf "$backup_file" -C "$stacks_dir" "$stack_name" && echo "${grn}Backup complete.${rst}"
+}
+ctbu(){ ct_stack_backup "$@"; }
+
+ct_new_stack(){
+    if [ "$#" -ne 2 ]; then
+        echo "${red}Error:${ylw} Missing stack name.${rst}"
+        return 1
     fi
-    return
-else
-
-    ct_start(){ ct_cmd compose -f "$stacks_dir/${1}/compose.yml" up -d --remove-orphans || echo "${red}Error: Failed to start stack '${1}'.${rst}"; }
-    ctu(){ ct_start "$@"; }
-
-    ct_stop() { ct_cmd compose -f "$stacks_dir/${1}/compose.yml" down || echo "${red}Error: Failed to stop stack '${1}'.${rst}"; }
-    ctd(){ ct_stop "$@"; }
-
-    ct_bounce(){ ct_stop "$1" && ct_start "$1" || echo "${red}Error: Failed to bounce stack '$1'.${rst}"; }
-    ctb(){ ct_bounce "$@"; }
-
-    ct_logs(){ ct_cmd compose -f "$stacks_dir/${1}/compose.yml" logs -f --tail=50 || echo "${red}Error: Failed to get logs for stack '${1}'.${rst}"; }
-    ctg(){ ct_logs "$@"; }
-
-    ct_stack_backup() {
-        local stack_name="${1:-}"
-        [[ -z "$stack_name" ]] && { log FAIL "Stack name required"; return 1; }
-
-        local stack_dir="$(get_stack_dir "$stack_name")"
-        [[ ! -d "$stack_dir" ]] && { log FAIL "Stack '$stack_name' does not exist."; return 1; }
-
-        local ts
-        ts="$(date +%Y%m%d_%H%M%S)"
-        local target_backup_dir="${backup_dir}/${stack_name}"
-        local backup_file="${target_backup_dir}/${stack_name}_${ts}.tar.gz"
-
-        mkdir -p "$target_backup_dir"
-        log INFO "Creating backup: $backup_file"
-        tar -czf "$backup_file" -C "$stacks_dir" "$stack_name"
-        log DONE "Backup complete."
-    }
-    ctbu(){ ct_stack_backup "$@"; }
-
-    ct_new_stack(){
-        if [ "$#" -ne 2 ]; then
-            echo "${red}Error:${ylw} Missing stack name.${rst}"
-            return 1
+    local scope="$1"
+    local stack="$2"
+    if [ "$scope" = "stack" ]; then
+        scope=""
+    fi
+    local stack_path="${stacks_dir}${scope:+/$scope}/$stack"
+    local env_file="$common_dir/.container.env"
+    local env_link="$stack_path/.env"
+    if [ -z "$ct_uid" ] || [ -z "$ct_gid" ]; then
+        echo "${red}Error${rst}: $ct_engine user/group not defined — cannot create stack."; return 1
+    fi
+    _fs_cmd install -o "$ct_uid" -g "$ct_gid" -m 774 -d "$stack_path"
+    _fs_cmd install -o "$ct_uid" -g "$ct_gid" -m 660 /dev/null "$stack_path/compose.yml"
+    if [ ! -e "$env_link" ]; then
+        if [ -f "$env_file" ]; then
+            ln -sf "$env_file" "$env_link"
+        else
+            _fs_cmd install -o "$ct_uid" -g "$ct_gid" -m 660 /dev/null "$env_link"
         fi
-        local scope="$1"
-        local stack="$2"
-        if [ "$scope" = "stack" ]; then
-            scope=""
-        fi
-        local stack_path="${stacks_dir}${scope:+/$scope}/$stack"
-        local env_file="$common_dir/.container.env"
-        local env_link="$stack_path/.env"
-        if [ -z "$ct_uid" ] || [ -z "$ct_gid" ]; then
-            echo "${red}Error${rst}: $ct_engine user/group not defined — cannot create stack."; return 1
-        fi
-        _fs_cmd install -o "$ct_uid" -g "$ct_gid" -m 774 -d "$stack_path"
-        _fs_cmd install -o "$ct_uid" -g "$ct_gid" -m 660 /dev/null "$stack_path/compose.yml"
-        if [ ! -e "$env_link" ]; then
-            if [ -f "$env_file" ]; then
-                ln -sf "$env_file" "$env_link"
-            else
-                _fs_cmd install -o "$ct_uid" -g "$ct_gid" -m 660 /dev/null "$env_link"
-            fi
-        fi
-        echo "${grn}Created stack files in ${cyn}${stack_path}${rst}"
-    }
-    ctns(){ ct_new_stack "stack" "$@"; }
-    ctn(){ ct_new_stack "local" "$@"; }
+    fi
+    echo "${grn}Created stack files in ${cyn}${stack_path}${rst}"
+}
+ctns(){ ct_new_stack "stack" "$@"; }
+ctn(){ ct_new_stack "local" "$@"; }
 
-    ct_dir(){
-        local scope stack target
-        scope="$1"
-        stack="$2"
-        [ "$#" -ne 2 ] && { echo "${red}Error:${ylw} Missing stack name.${rst}"; return 1; }
-        [ "$scope" = "stack" ] && scope=""
-        target="${stacks_dir}${scope:+/$scope}/$stack"
-        [ -d "$target" ] || { echo "${red}Error:${ylw} Stack '${cyn}$target${ylw}' not found.${rst}"; return 1; }
-        cd "$target"
-    }
-    cds(){ ct_dir "stack" "$@"; }
+# cd into the stacks directory, or into a named stack
+ct_dir(){
+    local scope="$1" stack="$2" target
+    [ "$scope" = "stack" ] && scope=""
+    target="${stacks_dir}${scope:+/$scope}${stack:+/$stack}"
+    [ -d "$target" ] || { echo "${red}Error:${ylw} Stack '${cyn}$target${ylw}' not found.${rst}"; return 1; }
+    cd "$target"
+}
+cds(){ ct_dir "stack" "$@"; }
 
-    ct_list_networks(){
-        printf "%sNETWORK ID\tDRIVER\tSCOPE\tNAME%s\n" "$bld" "$rst"
-        ct_cmd network ls --format "{{.ID}}\t{{.Driver}}\t{{.Scope}}\t{{.Name}}" || echo "${red}Error: Failed to list networks.${rst}"
-    }
-    ctln(){ ct_list_networks "$@"; }
+ct_list_networks(){
+    printf "%sNETWORK ID\tDRIVER\tSCOPE\tNAME%s\n" "$bld" "$rst"
+    ct_cmd network ls --format "{{.ID}}\t{{.Driver}}\t{{.Scope}}\t{{.Name}}" || echo "${red}Error: Failed to list networks.${rst}"
+}
+ctln(){ ct_list_networks "$@"; }
 
-    ct_list_containers() {
-        { printf "CONTAINER ID\tNAME\tSTATUS\tPORTS\n"
-            # 2. Get data, sort, and clean Ports via awk (plain text only)
-            # Strip 0.0.0.0: and IPv6 [::]: prefixes, then remove container port mappings
-            ct_cmd ps --format "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}" | \
-            sort -k2,2 | \
-            awk 'BEGIN { FS="\t"; OFS="\t" } {
-                gsub(/0\.0\.0\.0:/, "", $4)
-                gsub(/, *\[::\]:[^ ]*/, "", $4)
-                gsub(/->[0-9]+/, "", $4)
-                print $1, $2, $3, $4
-            }'
-        } | column -ts $'\t' | sed -E "
-            1 s/^.*$/$bld&$rst/
-            2,\$ s/^([^ ]+ +)([^ ]+)/\1$cyn\2$rst/
-            s/unhealthy/$red&$rst/g
-            s/\bhealthy\b/$grn&$rst/g
-            s/([0-9]+\/[a-z]+)/$blu\1$rst/g
-        " || echo "${red}Error: Failed to list containers.${rst}"
-    }
-    ctl(){ ct_list_containers "$@"; }
-    ctlc(){ ct_list_containers "$@"; }
-
-fi
+ct_list_containers() {
+    { printf "CONTAINER ID\tNAME\tSTATUS\tPORTS\n"
+        # Strip 0.0.0.0: and IPv6 [::]: prefixes, then remove container port mappings
+        ct_cmd ps --format "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}" | \
+        sort -k2,2 | \
+        awk 'BEGIN { FS="\t"; OFS="\t" } {
+            gsub(/0\.0\.0\.0:/, "", $4)
+            gsub(/, *\[::\]:[^ ]*/, "", $4)
+            gsub(/->[0-9]+/, "", $4)
+            print $1, $2, $3, $4
+        }'
+    } | column -ts $'\t' | sed -E "
+        1 s/^.*$/$bld&$rst/
+        2,\$ s/^([^ ]+ +)([^ ]+)/\1$cyn\2$rst/
+        s/unhealthy/$red&$rst/g
+        s/\bhealthy\b/$grn&$rst/g
+        s/([0-9]+\/[a-z]+)/$blu\1$rst/g
+    " || echo "${red}Error: Failed to list containers.${rst}"
+}
+ctl(){ ct_list_containers "$@"; }
+ctlc(){ ct_list_containers "$@"; }

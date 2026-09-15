@@ -54,11 +54,15 @@ alias port='netstat -tulpn | grep'
 alias ping='ping -c 3'
 alias lan='ip -c -br a'
 alias cls='clear'
+alias myip='iphost'
 
 # --- Functions ---
 # Aliases outrank functions in zsh, so drop any same-named alias a distro may
 # define (e.g. CachyOS aliases `md` to `mkdir -p`) before we define ours below.
-unalias md edit toclip cb pb genhash genkey genssh ssh-add-all tmx hermes 2>/dev/null
+unalias md edit toclip cb pb genhash genkey genssh ssh-add-all iphost tmx hermes ts 2>/dev/null
+
+# Public IP of this host
+function iphost() { echo "Host IP: $(curl -fsSL https://ifconfig.me 2>/dev/null || wget -qO- https://ifconfig.me)"; }
 
 # Creates directory and enters it
 function md() {
@@ -194,9 +198,9 @@ function genssh() {
         -C "$comment"
 }
 
-# Function to add all keys in ~/.ssh (ignoring public keys and config)
+# Adds every private key in the top level of ~/.ssh; skips archive/, .pub, config*, known_hosts*
 function ssh-add-all() {
-    find ~/.ssh -type f -not -name "*.pub" -not -name "config" -not -name "known_hosts" -exec ssh-add {} +
+    find ~/.ssh -maxdepth 1 -type f -not -name "*.pub" -not -name "config*" -not -name "known_hosts*" -exec ssh-add {} +
 }
 
 # --- Git ---
@@ -242,3 +246,5 @@ function hermes() {
         HERMES_GATEWAY_URL='ws://hermes.home.lan:9119' command hermes desktop
     fi
 }
+
+function ts() { tailscale "$@"; }
