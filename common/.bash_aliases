@@ -59,7 +59,7 @@ alias myip='iphost'
 # --- Functions ---
 # Aliases outrank functions in zsh, so drop any same-named alias a distro may
 # define (e.g. CachyOS aliases `md` to `mkdir -p`) before we define ours below.
-unalias md edit toclip cb pb genhash genkey genssh ssh-add-all iphost tmx hermes ts 2>/dev/null
+unalias md edit toclip cb pb genhash genkey genssh ssh-add-all iphost tmx hermes ts rcp rmv 2>/dev/null
 
 # Public IP of this host
 function iphost() { echo "Host IP: $(curl -fsSL https://ifconfig.me 2>/dev/null || wget -qO- https://ifconfig.me)"; }
@@ -201,6 +201,25 @@ function genssh() {
 # Adds every private key in the top level of ~/.ssh; skips archive/, .pub, config*, known_hosts*
 function ssh-add-all() {
     find ~/.ssh -maxdepth 1 -type f -not -name "*.pub" -not -name "config*" -not -name "known_hosts*" -exec ssh-add {} +
+}
+
+# --- rsync copy / move (works in bash & zsh) ---
+# Shared flags: archive, human sizes, one overall progress bar, keep partial
+# files and resume them on rerun. Local and user@host:path targets both work.
+_rsync_flags=(-ah --info=progress2 --partial --append-verify)
+
+# rsync copy. Extra rsync flags pass straight through, e.g. `rcp -n src dst`.
+function rcp() { rsync "${_rsync_flags[@]}" "$@"; }
+
+# rsync move: copies, deletes each source file once it lands, then removes the
+# emptied local source directories that rsync leaves behind.
+function rmv() {
+  rsync "${_rsync_flags[@]}" --remove-source-files "$@" || return
+  local src
+  for src in "${@:1:$#-1}"; do
+    case "$src" in -*|*:*) continue ;; esac
+    [[ -d "$src" ]] && find "$src" -type d -empty -delete
+  done
 }
 
 # --- Git ---
