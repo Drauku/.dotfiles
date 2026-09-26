@@ -3,7 +3,7 @@
 # Shared interactive-shell setup for bash and zsh: PATH, then every
 # ~/.bash_<name> file (common ones first, then one per stowed package).
 
-configs=("aliases" "colors" "secrets" "vars")
+configs=("aliases" "colors")
 if [ -d "$HOME/.dotfiles" ]; then
     for dir in "$HOME/.dotfiles"/*/; do
         [ -d "$dir" ] || continue
@@ -21,6 +21,14 @@ export PATH="$HOME/.local/bin:$PATH"
 if [ -n "$PATH" ]; then
     export PATH=$(echo -n "$PATH" | awk -v RS=: -v ORS=: '!x[$0]++' | sed 's/:$//')
 fi
+
+# Plain NAME=value lines in the per-host vars and secrets files are exported,
+# so programs launched from the shell inherit them.
+set -a
+for conf in secrets vars; do
+    src="$HOME/.bash_$conf"; [ -f "$src" ] && . "$src"
+done
+set +a
 
 for conf in "${configs[@]}"; do
     src="$HOME/.bash_$conf"; [ -f "$src" ] && . "$src"

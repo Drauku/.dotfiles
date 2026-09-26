@@ -153,10 +153,17 @@ EOF
         fi
     fi
 
-    # Initialize Secrets
-    if [ ! -f "$HOME/.bash_secrets" ]; then
+    # Initialize Secrets: a private, untracked real file, never a link into the repo.
+    local secrets="$HOME/.bash_secrets"
+    if [ -L "$secrets" ] && [[ "$(readlink -f "$secrets")" == "$repo_dir"* ]]; then
+        echo -e "${ylw}Replacing repo symlink ${cyn}~/.bash_secrets${rst}${ylw} with a local file...${rst}"
+        rm "$secrets"
+    fi
+    if [ ! -e "$secrets" ]; then
         echo -e "${ylw}Initializing .bash_secrets...${rst}"
-        echo -e "# Private environment variables" > "$HOME/.bash_secrets"
+        printf '%s\n' "#!/bin/bash" "# --- .bash_secrets --- (local only, not in the dotfiles repo)" \
+            "# NAME=value  (exported by ~/.bash_init)" > "$secrets"
+        chmod 600 "$secrets"
     fi
 }
 
