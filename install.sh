@@ -291,6 +291,19 @@ current_shell_is() {
     [ "$(ps -o comm= -p "$PPID" 2>/dev/null)" = "$1" ]
 }
 
+# The rc file the user's interactive shell reads: the shell that launched this
+# script, else the login shell ($SHELL).
+current_rc_file() {
+    local sh
+    sh="$(ps -o comm= -p "$PPID" 2>/dev/null)"
+    case "$sh" in bash|zsh|fish) ;; *) sh="${SHELL##*/}" ;; esac
+    case "$sh" in
+        zsh)  echo "~/.zshrc" ;;
+        fish) echo "~/.config/fish/config.fish" ;;
+        *)    echo "~/.bashrc" ;;
+    esac
+}
+
 select_packages() {
     selected_pkgs=("${standard_pkgs[@]}")
 
@@ -449,7 +462,7 @@ execute_deployment() {
         if ! bash "$repo_dir/zsh/install-zsh-p10k.sh"; then
             echo -e "${red}Error: zsh environment install failed. Stow completed; review the output above.${rst}"
             [ -d "$backup_dir" ] && echo -e "Backups saved to: ${mgn}$backup_dir${rst}"
-            echo -e "Your other stowed packages are in place — run ${ylw}source ~/.bashrc${rst} to load them."
+            echo -e "Your other stowed packages are in place — run ${ylw}source $(current_rc_file)${rst} to load them."
             exit 1
         fi
     fi
@@ -459,10 +472,11 @@ execute_deployment() {
     configure_fish_aliases
 
     [ -d "$backup_dir" ] && echo -e "Backups saved to: ${mgn}$backup_dir${rst}"
+    # A fresh zsh reads ~/.zshrc itself, so sourcing the old shell's rc is moot.
     if [[ -n "$run_zsh_install" ]]; then
-        echo -e "\nTo finish: ${ylw}source ~/.bashrc${rst}, then run ${ylw}exec zsh${rst} (or open a new terminal) to load the zsh/powerlevel10k changes."
+        echo -e "\nTo finish: run ${ylw}exec zsh${rst} (or open a new terminal) to load the zsh/powerlevel10k changes."
     else
-        echo -e "\nTo finish: ${ylw}source ~/.bashrc${rst}"
+        echo -e "\nTo finish: ${ylw}source $(current_rc_file)${rst}"
     fi
     echo -e "\n${grn}${bld}--- Deployment Complete ---${rst}"
 }
