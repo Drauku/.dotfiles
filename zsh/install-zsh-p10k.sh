@@ -107,16 +107,28 @@ install_packages() {
 
 install_fonts() {
     [ "$PKG_MANAGER" = "pacman" ] && return 0
-    printf "\n Installing MesloLGS Nerd Fonts...\n"
     local font_dir="${HOME}/.local/share/fonts"
-    mkdir -p "$font_dir"
     local base="https://github.com/romkatv/powerlevel10k-media/raw/master"
+    local missing=()
     for encoded in "MesloLGS%20NF%20Regular.ttf" "MesloLGS%20NF%20Bold.ttf" \
                    "MesloLGS%20NF%20Italic.ttf" "MesloLGS%20NF%20Bold%20Italic.ttf"; do
-        local decoded="${encoded//%20/ }"
-        curl -fsSL "${base}/${encoded}" -o "${font_dir}/${decoded}"
+        [ -s "${font_dir}/${encoded//%20/ }" ] || missing+=("$encoded")
     done
-    fc-cache -f -v
+    if [ ${#missing[@]} -eq 0 ]; then
+        printf "\n MesloLGS Nerd Fonts already installed, skipping.\n"
+        return 0
+    fi
+    printf "\n Installing MesloLGS Nerd Fonts...\n"
+    mkdir -p "$font_dir"
+    for encoded in "${missing[@]}"; do
+        local decoded="${encoded//%20/ }"
+        # Download to a temp name so an interrupted transfer is never mistaken
+        # for an installed font on the next run.
+        curl -fsSL "${base}/${encoded}" -o "${font_dir}/${decoded}.part" \
+            && mv -f "${font_dir}/${decoded}.part" "${font_dir}/${decoded}" \
+            || rm -f "${font_dir}/${decoded}.part"
+    done
+    fc-cache -f "$font_dir"
 }
 
 ## ─── oh-my-zsh (apt/dnf — Arch uses a system package) ───────────────────────
