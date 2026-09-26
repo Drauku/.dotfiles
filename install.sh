@@ -285,6 +285,12 @@ replay_selections() {
     done
 }
 
+# True when $1 is the login shell ($SHELL) or the shell that launched this script.
+current_shell_is() {
+    [ "${SHELL##*/}" = "$1" ] && return 0
+    [ "$(ps -o comm= -p "$PPID" 2>/dev/null)" = "$1" ]
+}
+
 select_packages() {
     selected_pkgs=("${standard_pkgs[@]}")
 
@@ -301,6 +307,8 @@ select_packages() {
     echo -e "\n${blu}${bld}--- Optional package selection ---${rst}\n"
     for pkg in "${optional_pkgs[@]}"; do
         [ ! -d "$repo_dir/$pkg" ] && continue
+        # fish configs are offered only when fish is the shell in use.
+        [[ "$pkg" == "fish" ]] && ! current_shell_is fish && continue
         ask "${ylw}Stow ${cyn}$pkg${rst}${ylw} configs?${rst} (y/N): " "n"
 
         case "$REPLY" in
